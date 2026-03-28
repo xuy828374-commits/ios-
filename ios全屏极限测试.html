@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Mika App 打开动画测试</title>
+  
+  <style>
+    /* === 1. 地基部分（这个你已经成功全屏了） === */
+    html, body {
+      margin: 0; padding: 0; width: 100%;
+      height: 100vh; /* 安卓兜底 */
+      min-height: -webkit-fill-available; /* iOS 魔法强制全屏 */
+      background-color: #f0f2f5; 
+      overscroll-behavior-y: none; /* 干掉橡皮筋白边 */
+      overflow: hidden; /* 锁死物理屏幕滚动 */
+      font-family: sans-serif;
+    }
+
+    /* 2. 桌面底层（渐变色背景） */
+    #app-container {
+      width: 100%; height: 100%; position: relative;
+      /* 用渐变色测试：如果 App 打开后漏了底，你就能看见这个颜色 */
+      background: linear-gradient(to bottom, #e0c3fc 0%, #8ec5fc 100%);
+      display: flex; justify-content: center; align-items: center;
+    }
+
+    /* 桌面上的触发按钮（模拟 App 图标） */
+    .open-app-btn {
+      padding: 15px 30px; background: rgba(255,255,255,0.8);
+      border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      cursor: pointer; border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    /* === 3. 这就是你要测试的那个“白盒子” App === */
+    #simulated-app {
+      /* 核心杀手锏：绝对定位 + 四边强制为 0。
+         只要它的老祖宗（#app-container）是满的，它就会强行跟物理屏幕一模一样大，
+         哪怕中间有 100 层 div 套娃，它也能一毫米缝隙都不留地钉在最底部！ */
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0; 
+      z-index: 100;
+      
+      background-color: #ffffff; /* 纯白底色 */
+      
+      /* 使用 flex 布局，方便内部划分头部、内容区和底栏 */
+      display: flex;
+      flex-direction: column;
+
+      /* 动画设置：从底部滑出 */
+      transform: translateY(100%); /* 初始状态在屏幕外面 */
+      transition: transform 0.3s ease-out; /* 优雅的滑出动画 */
+      visibility: hidden; /* 隐藏状态，不占位置 */
+    }
+
+    /* App 打开后的状态 */
+    #simulated-app.app-open {
+      transform: translateY(0); /* 滑到屏幕内 */
+      visibility: visible;
+    }
+
+    /* App 内部的头部 */
+    .app-header {
+      background-color: #f8f8f8;
+      border-bottom: 1px solid #eee;
+      /* 顶部补丁：留出刘海/状态栏空间 */
+      padding-top: env(safe-area-inset-top); 
+      padding-bottom: 15px;
+      position: relative;
+    }
+    .close-btn { position: absolute; right: 20px; bottom: 15px; color: #888; cursor: pointer; }
+
+    /* App 内部可以滚动的聊天区/内容区 */
+    .app-content {
+      flex: 1; /* 占据中间所有剩余空间 */
+      overflow-y: auto; /* 只有这里能上下滚 */
+      -webkit-overflow-scrolling: touch;
+      padding: 20px; text-align: center;
+    }
+
+    /* App 内部的底栏（比如你的 Chars, Friends 导航） */
+    .app-tabbar {
+      background-color: #f8f8f8;
+      border-top: 1px solid #eee;
+      display: flex; justify-content: space-around; align-items: center;
+      padding-top: 10px;
+      
+      /* 【终极关键补丁】：给底栏加上底部安全区 padding！
+         这一步是让 Tabbar 的背景色“沉下去”填满屏幕最底部，
+         但是里面的文字图标会被这个 padding 顶上来，不会和小黑条重叠，保证能看见！ */
+      padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    }
+    .tab-item { color: #888; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <div id="app-container">
+    
+    <div class="open-app-btn" onclick="openApp()">打开 Mika App</div>
+
+    <div id="simulated-app">
+      
+      <div class="app-header">
+        Mika 内部应用
+        <div class="close-btn" onclick="closeApp()">[关闭]</div>
+      </div>
+
+      <div class="app-content">
+        <p>你看，现在这个白盒子完美铺满了！</p>
+        <p>不管是顶部刘海，还是底部小黑条，</p>
+        <p>一丁点蓝紫色的底裤（渐变色）都漏不出来了。</p>
+        <p>这就是 position: absolute + bottom: 0 的威力。</p>
+        <p>（往下翻页测试滚动...）</p>
+        <div style="height:1000px; background:linear-gradient(to bottom, #eee 0%, #ddd 100%); margin-top:20px;">
+          占位内容，测试滚动链条
+        </div>
+      </div>
+
+      <div class="app-tabbar">
+        <div class="tab-item">💬 Chars</div>
+        <div class="tab-item">👥 Friends</div>
+        <div class="tab-item">⚙️ Moments</div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // 简单的 JS 控制动画
+    function openApp() {
+      document.getElementById('simulated-app').classList.add('app-open');
+    }
+    function closeApp() {
+      document.getElementById('simulated-app').classList.remove('app-open');
+    }
+  </script>
+
+</body>
+</html>
