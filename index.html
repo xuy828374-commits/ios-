@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>极简纯平·韩系AI小手机</title>
+<script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"></script>
+<style>
+/* =============================================
+   全局重置
+============================================= */
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }
+body {
+  display: flex; justify-content: center; align-items: center;
+  min-height: 100vh; background-color: #f7f7f7; margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  transition: background-color 0.3s; overflow: hidden;
+}
+
+/* =============================================
+   手机壳（无内细线）
+============================================= */
+.phone-frame {
+  position: relative; width: 280px; height: 580px;
+  background-color: #fff; border: 5px solid #e5e5e5;
+  border-radius: 42px; box-shadow: 0 12px 48px rgba(0,0,0,0.07);
+  transition: all 0.35s cubic-bezier(0.25,0.8,0.25,1);
+}
+.screen {
+  width: 100%; height: 100%; background-color: #f5f5f5;
+  border-radius: 37px; overflow: hidden; position: relative;
+  transition: border-radius 0.3s;
+}
+
+/* 全屏模式 */
+body.fullscreen-mode { background-color: #000; }
+body.fullscreen-mode .phone-frame { width:100vw; height:100vh; border:none; border-radius:0; }
+body.fullscreen-mode .screen { border-radius:0; }
+
+/* =============================================
+   壁纸层（固定，不参与 app 平移）
+============================================= */
+#wallpaper-layer {
+  position: absolute; inset: 0; z-index: 0;
+  background-size: cover; background-position: center;
+  pointer-events: none;
+}
+
+/* =============================================
+   状态栏（图标缩小）
+============================================= */
+.mika-status-bar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 10000;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 9px 16px 0; height: 30px;
+  color: #555; font-size: 12px; font-weight: 600; letter-spacing: -0.4px;
+  user-select: none; pointer-events: none; transition: opacity 0.3s;
+}
+.mika-status-bar.hide { opacity: 0; }
+.mika-status-icons { display: flex; align-items: center; gap: 4px; }
+
+/* =============================================
+   Home Bar
+============================================= */
+#global-home-bar {
+  position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+  width: 80px; height: 14px; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: opacity 0.3s;
+}
+#global-home-bar.hide { opacity: 0; pointer-events: none; }
+#ghb-bar { width: 56px; height: 3.5px; background: rgba(0,0,0,0.28); border-radius: 10px; }
+
+/* =============================================
+   App 视图通用层
+============================================= */
+.app-view {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  transition: transform 0.35s cubic-bezier(0.25,0.8,0.25,1);
+}
+
+/* =============================================
+   桌面 (home-view)
+   Grid：4列 × N行，单元格大小固定
+============================================= */
+#home-view { z-index: 10; overflow: hidden; }
+
+#pages-container {
+  display: flex; width: 100%; height: 100%;
+  transition: transform 0.38s cubic-bezier(0.25,0.8,0.25,1);
+  will-change: transform;
+}
+
+/*
+  每一页使用绝对定位网格。
+  桌面可用区：280px 宽，去掉 dock(84px) + 状态栏(36px) = 约 460px 高
+  网格：4列，单元格宽 = (280 - 2*14px边距 - 3*gap) / 4 = (252-30)/4 ≈ 55.5
+  这里用 CSS Grid + 绝对坐标驱动
+*/
+.home-page {
+  flex: 0 0 100%; width: 100%; height: 100%;
+  position: relative;
+  /* 可点区域不包含 dock 和状态栏 */
+}
+
+/* 网格系统参数（JS 同步这些值） */
+:root {
+  --grid-cols: 4;
+  --grid-cell: 55px;   /* 单元格宽高 */
+  --grid-gap: 16px;    /* 列间距 */
+  --grid-top: 38px;    /* 顶部偏移（状态栏下方） */
+  --grid-left: 14px;   /* 左边距 */
+}
+
+/* App 图标 */
+.app-icon {
+  position: absolute; /* 用 JS 设置 left/top */
+  display: flex; flex-direction: column; align-items: center;
+  cursor: pointer; width: var(--grid-cell); gap: 5px;
+  transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1), left 0.25s ease, top 0.25s ease;
+  user-select: none; touch-action: none;
+}
+.app-icon.dragging {
+  /* 拖拽中：放大 + 阴影增强，过渡由 JS 直接操控 */
+  transform: scale(1.12);
+  z-index: 9999;
+  transition: transform 0.15s ease;
+  filter: drop-shadow(0 8px 20px rgba(0,0,0,0.18));
+}
+.app-icon.ghost {
+  /* 拖拽时原位置的占位幽灵 */
+  opacity: 0.3;
+  transition: none;
+  pointer-events: none;
+}
+/* 编辑模式：图标微抖动 */
+@keyframes wiggle {
+  0%,100% { transform: rotate(-1.2deg); }
+  50%      { transform: rotate(1.2deg); }
+}
+.home-page.edit-mode .app-icon:not(.dragging) {
+  animation: wiggle 0.6s ease-in-out infinite;
+}
+
+.app-icon .icon-box {
+  width: 48px; height: 48px; background: rgba(255,255,255,0.9);
+  border-radius: 14px; display: flex; justify-content: center; align-items: center;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06); backdrop-filter: blur(10px);
+  overflow: hidden; flex-shrink: 0;
+}
+.app-icon svg { width: 24px; height: 24px; stroke: #111; stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.app-icon span { font-size: 10.5px; color: #444; font-weight: 600; text-shadow: 0 1px 2px rgba(255,255,255,0.6); white-space: nowrap; }
+
+/* 页面指示点 */
+#page-dots {
+  position: absolute; bottom: 70px; left: 0; right: 0;
+  display: flex; justify-content: center; gap: 5px; z-index: 5; pointer-events: none;
+}
+.page-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: rgba(0,0,0,0.22); transition: all 0.22s;
+}
+.page-dot.active { background: rgba(0,0,0,0.55); width: 14px; border-radius: 3px; }
+
+/* 加页按钮（编辑模式右上角浮现）*/
+#add-page-btn {
+  position: absolute; top: 38px; right: 12px; z-index: 200;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(255,255,255,0.88); border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.10);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.22s, transform 0.22s;
+  transform: scale(0.7);
+}
+#home-view.edit-mode #add-page-btn {
+  opacity: 1; pointer-events: auto; transform: scale(1);
+}
+
+/* Dock */
+.dock {
+  position: absolute; bottom: 16px; left: 14px; right: 14px; height: 62px; z-index: 5;
+  background: rgba(235,235,240,0.3); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(255,255,255,0.45); border-radius: 22px;
+  display: flex; justify-content: space-evenly; align-items: center;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+}
+.dock .app-icon { position: relative; left: auto !important; top: auto !important; width: 44px; gap: 0; transition: transform 0.2s; animation: none !important; }
+.dock .app-icon span { display: none; }
+.dock .icon-box { width: 44px; height: 44px; border-radius: 12px; background: rgba(255,255,255,0.95); }
+
+/* =============================================
+   设置 App
+============================================= */
+#settings-app {
+  transform: translateX(100%); z-index: 50;
+  background: #f2f2f7; color: #4a4a4a;
+  overflow-y: auto; overflow-x: hidden;
+  -ms-overflow-style: none; scrollbar-width: none;
+  --ios-bg: #f2f2f7; --ios-card: #fff; --ios-text-main: #4a4a4a;
+  --ios-text-sub: #a1a1a1; --ios-border: rgba(60,60,67,0.12);
+  --pill-bg: #e5e5ea; --pill-active: #4a4a4a;
+  --toggle-inactive: #e5e5ea; --toggle-active: #d1d1d6;
+}
+#settings-app::-webkit-scrollbar { display: none; }
+#settings-app .page { display: none; min-height: 100%; padding-bottom: 40px; }
+#settings-app .page.active { display: block; }
+
+#settings-app .nav-header {
+  min-height: 60px; display: flex; align-items: flex-end; justify-content: space-between;
+  background: rgba(242,242,247,0.92); backdrop-filter: blur(20px);
+  position: sticky; top: 0; z-index: 100;
+  border-bottom: 0.5px solid var(--ios-border);
+  padding: 28px 16px 10px;
+}
+#settings-app .nav-center { font-weight: 600; font-size: 16px; text-align: center; flex: 1; line-height: 1; }
+#settings-app .nav-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--ios-text-sub); font-size: 15px;
+  display: flex; align-items: center; width: 50px; line-height: 1;
+}
+#settings-app .nav-btn.right { justify-content: flex-end; }
+
+/* 设置主页标题区 — 整体可点击返回 */
+#settings-main-header {
+  padding: 14px 16px 4px; cursor: pointer;
+}
+#settings-app .page-title { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+#settings-app .search-box {
+  margin: 8px 16px 14px; background: rgba(118,118,128,0.12);
+  border-radius: 10px; padding: 7px 12px; display: flex; align-items: center; gap: 8px;
+}
+#settings-app .search-box svg { width: 14px; height: 14px; color: var(--ios-text-sub); stroke-width: 2.5; }
+#settings-app .search-box span { color: var(--ios-text-sub); font-size: 14px; }
+
+#settings-app .list-group { background: var(--ios-card); margin: 0 16px 14px; border-radius: 12px; overflow: hidden; }
+#settings-app .list-item { display: flex; align-items: center; padding: 11px 14px; position: relative; cursor: pointer; min-height: 46px; }
+#settings-app .list-item:not(:last-child)::after { content:''; position:absolute; bottom:0; left:52px; right:0; height:0.5px; background:var(--ios-border); }
+#settings-app .item-icon { width:28px; height:28px; border-radius:7px; margin-right:12px; display:flex; align-items:center; justify-content:center; background:#f8f8f8; flex-shrink:0; overflow:hidden; }
+#settings-app .item-icon svg { width:16px; height:16px; fill:none; stroke:var(--ios-text-main); stroke-width:2; }
+#settings-app .item-content { flex:1; font-size:15px; }
+#settings-app .chevron { width:16px; height:16px; color:#c4c4c6; stroke-width:2.5; flex-shrink:0; }
+
+/* pill 切换器 */
+#settings-app .center-wrap { text-align: center; width: 100%; }
+#settings-app .config-switcher-wrapper {
+  background: var(--pill-bg); border-radius: 100px; padding: 4px;
+  margin: 10px auto; display: inline-flex; gap: 3px;
+  overflow-x: auto; scrollbar-width: none; max-width: 92%;
+}
+#settings-app .config-switcher-wrapper::-webkit-scrollbar { display: none; }
+#settings-app .config-pill {
+  padding: 5px 12px; border-radius: 100px; border: none; background: transparent;
+  font-size: 12px; font-weight: 500; color: var(--ios-text-sub);
+  cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: 5px;
+}
+#settings-app .config-pill.active { background: var(--pill-active); color: #fff; }
+#settings-app .mini-del {
+  width: 13px; height: 13px; background: rgba(255,255,255,0.25);
+  border-radius: 50%; display: flex; align-items: center; justify-content:center;
+  font-size: 10px; font-weight: bold; line-height: 1;
+}
+
+/* API 表单 */
+#settings-app .api-form { padding: 0 16px; }
+#settings-app .form-label { font-size:11px; color:var(--ios-text-sub); text-transform:uppercase; margin:10px 0 5px 4px; display:block; letter-spacing:0.5px; }
+#settings-app .capsule-input { width:100%; padding:10px 14px; border:1px solid var(--ios-border); border-radius:12px; font-size:14px; outline:none; color:var(--ios-text-main); background:#fff; height:42px; margin-bottom:8px; }
+#settings-app .input-row { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+#settings-app .refresh-btn { width:42px; height:42px; border-radius:50%; border:1px solid var(--ios-border); background:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
+#settings-app .save-btn { width:100%; height:44px; background:var(--pill-active); color:#fff; border:none; border-radius:100px; font-size:15px; font-weight:600; margin:10px 0 8px; cursor:pointer; }
+#settings-app .secondary-btn { width:100%; height:40px; background:transparent; color:var(--ios-text-sub); border:1px solid var(--ios-border); border-radius:100px; font-size:14px; cursor:pointer; margin-bottom:8px; }
+
+/* 开关 */
+#settings-app .toggle-switch { width:46px; height:26px; background:var(--toggle-inactive); border-radius:16px; position:relative; cursor:pointer; transition:background 0.3s; flex-shrink:0; }
+#settings-app .toggle-switch::after { content:''; position:absolute; top:2px; left:2px; width:22px; height:22px; background:#fff; border-radius:50%; box-shadow:0 2px 4px rgba(0,0,0,0.15); transition:transform 0.3s; }
+#settings-app .toggle-switch.active { background:var(--toggle-active); }
+#settings-app .toggle-switch.active::after { transform:translateX(20px); }
+
+/* 测试区 */
+#settings-app .test-card { margin:10px 16px; padding:14px 16px; border-radius:14px; background:#fff; }
+#settings-app .run-test-btn { width:100%; margin-top:10px; padding:10px; border-radius:100px; border:1px solid var(--ios-border); background:none; color:var(--ios-text-main); font-size:13px; cursor:pointer; }
+#test-status { font-size:11.5px; padding:6px 0 2px; color:var(--ios-text-sub); font-family:monospace; min-height:22px; }
+#test-status.ok  { color:#34c759; }
+#test-status.err { color:#ff3b30; }
+
+/* 界面美化 */
+#settings-app .ui-view { display:none; }
+#settings-app .ui-view.active { display:block; }
+#settings-app .preview-icon { border:1px dashed #ccc; background:none; display:flex; justify-content:center; align-items:center; font-size:16px; color:#ccc; }
+
+/* 头像 */
+#settings-app .avatar-hero { text-align:center; padding:18px 0; }
+#settings-app .avatar-circle { width:80px; height:80px; border-radius:50%; overflow:hidden; margin:0 auto; border:2px solid #fff; box-shadow:0 4px 10px rgba(0,0,0,0.05); cursor:pointer; background:#e5e5ea; }
+#settings-app .avatar-circle img { width:100%; height:100%; object-fit:cover; }
+
+/* 调试台 */
+#settings-app .debug-console { margin:10px 16px; height:240px; background:#1c1c1e; color:#32d74b; font-family:monospace; font-size:10.5px; border-radius:14px; padding:12px; overflow-y:auto; line-height:1.7; }
+
+/* =============================================
+   自定义弹窗（模型选择器）
+============================================= */
+#modal-overlay {
+  display: none; position: absolute; inset: 0; z-index: 99999;
+  background: rgba(0,0,0,0.35); backdrop-filter: blur(4px);
+  align-items: flex-end; justify-content: center;
+  border-radius: 37px; overflow: hidden;
+}
+#modal-overlay.show { display: flex; }
+
+#modal-sheet {
+  width: 100%; background: #f2f2f7; border-radius: 20px 20px 0 0;
+  padding: 0 0 20px; max-height: 72%;
+  display: flex; flex-direction: column;
+  animation: slideUp 0.28s cubic-bezier(0.25,0.8,0.25,1);
+}
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+#modal-handle {
+  width: 36px; height: 4px; background: rgba(0,0,0,0.18);
+  border-radius: 10px; margin: 10px auto 0;
+}
+#modal-title {
+  font-size: 14px; font-weight: 600; color: #4a4a4a;
+  text-align: center; padding: 12px 0 8px;
+  border-bottom: 0.5px solid rgba(60,60,67,0.12);
+}
+#modal-list {
+  overflow-y: auto; flex: 1;
+  -ms-overflow-style: none; scrollbar-width: none;
+}
+#modal-list::-webkit-scrollbar { display: none; }
+.modal-item {
+  padding: 13px 20px; font-size: 14px; color: #4a4a4a;
+  cursor: pointer; border-bottom: 0.5px solid rgba(60,60,67,0.08);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-item:active { background: rgba(0,0,0,0.04); }
+.modal-item.selected { color: #4a4a4a; font-weight: 600; }
+.modal-item .check-mark { width:16px; height:16px; opacity:0; }
+.modal-item.selected .check-mark { opacity:1; }
+#modal-cancel {
+  margin: 8px 16px 0; padding: 12px;
+  background: #fff; border: none; border-radius: 12px;
+  font-size: 15px; color: #4a4a4a; cursor: pointer; font-weight: 500;
+}
+</style>
+</head>
+<body>
+
+<div class="phone-frame">
+<div class="screen">
+
+  <!-- 壁纸层 -->
+  <div id="wallpaper-layer"></div>
+
+  <!-- 状态栏（图标缩小） -->
+  <div class="mika-status-bar" id="status-bar">
+    <div id="mika-time">00:00</div>
+    <div class="mika-status-icons">
+      <!-- 信号 -->
+      <svg width="14" height="10" viewBox="0 0 17 12" fill="currentColor">
+        <rect x="0" y="8" width="2.6" height="4" rx="1"/>
+        <rect x="4.6" y="5.5" width="2.6" height="6.5" rx="1"/>
+        <rect x="9.2" y="3" width="2.6" height="9" rx="1"/>
+        <rect x="13.8" y="0" width="2.6" height="12" rx="1"/>
+      </svg>
+      <!-- WiFi -->
+      <svg width="13" height="10" viewBox="0 0 16 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M1.5 3.5C5 1 11 1 14.5 3.5"/>
+        <path d="M4.5 7C7 5.5 9 5.5 11.5 7"/>
+        <circle cx="8" cy="10.5" r="1.5" fill="currentColor" stroke="none"/>
+      </svg>
+      <!-- 电池 -->
+      <svg width="20" height="10" viewBox="0 0 24 12" fill="none">
+        <rect x="1" y="1" width="19" height="10" rx="3.5" stroke="currentColor" stroke-width="1.2" opacity="0.4"/>
+        <rect x="3" y="3" width="12" height="6" rx="1.5" fill="currentColor"/>
+        <path d="M21.5 4.5V7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 桌面 -->
+  <div id="home-view" class="app-view">
+    <div id="pages-container">
+      <!-- 第1页由 JS 渲染 -->
+    </div>
+
+    <!-- 页面指示点 -->
+    <div id="page-dots"></div>
+
+    <!-- 加页按钮（编辑模式浮现）-->
+    <button id="add-page-btn" onclick="addPage()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2.5" stroke-linecap="round">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+
+    <!-- Dock（固定，不跟随页面） -->
+    <div class="dock">
+      <div class="app-icon" id="dock-icon-phone">
+        <div class="icon-box" id="icon-box-phone">
+          <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        </div>
+      </div>
+      <div class="app-icon" id="dock-icon-contacts">
+        <div class="icon-box" id="icon-box-contacts">
+          <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </div>
+      </div>
+      <div class="app-icon" id="dock-icon-photos">
+        <div class="icon-box" id="icon-box-photos">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+      </div>
+      <div class="app-icon" id="dock-icon-camera">
+        <div class="icon-box" id="icon-box-camera">
+          <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        </div>
+      </div>
+    </div>
+  </div><!-- /home-view -->
+
+  <!-- 设置 App -->
+  <div id="settings-app" class="app-view">
+
+    <!-- 主设置页 -->
+    <div class="page active" id="mainPage">
+      <!-- 点击标题区域整体返回桌面（隐藏返回按钮） -->
+      <div id="settings-main-header" onclick="returnToHome()">
+        <h1 class="page-title">设置</h1>
+      </div>
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <span>搜索</span>
+      </div>
+      <div class="list-group">
+        <div class="list-item" onclick="showSetPage('idPage')">
+          <div class="item-icon" style="width:50px;height:50px;border-radius:50%;background:#e5e5ea;">
+            <img id="mainAvatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E" style="width:100%;height:100%;object-fit:cover;">
+          </div>
+          <div class="item-content" style="margin-left:12px;">
+            <div id="mainName" style="font-weight:600;font-size:17px;">用户</div>
+            <div style="font-size:12px;color:var(--ios-text-sub);">ID · iCloud · 媒体与购买项目</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg>
+        </div>
+      </div>
+      <div class="list-group">
+        <div class="list-item" onclick="showSetPage('apiPage')"><div class="item-icon"><svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></div><div class="item-content">API 配置</div><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg></div>
+        <div class="list-item" onclick="showSetPage('notifyPage')"><div class="item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div><div class="item-content">通知</div><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg></div>
+        <div class="list-item"><div class="item-icon"><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></div><div class="item-content">Minimax 语音</div><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg></div>
+        <div class="list-item"><div class="item-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div><div class="item-content">导出 / 导入备份</div><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg></div>
+        <div class="list-item" onclick="showSetPage('debugPage')"><div class="item-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/></svg></div><div class="item-content">API 调试台</div><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg></div>
+        <div class="list-item"><div class="item-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div><div class="item-content">生图</div><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg></div>
+        <div class="list-item" onclick="showSetPage('uiPage')"><div class="item-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div><div class="item-content">界面美化</div><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg></div>
+      </div>
+    </div>
+
+    <!-- API 配置页 -->
+    <div class="page" id="apiPage">
+      <div class="nav-header">
+        <button class="nav-btn" onclick="showSetPage('mainPage')">
+          <svg width="10" height="18" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="3"><path d="M10 18L2 10L10 2"/></svg>
+        </button>
+        <div class="nav-center">API 配置</div>
+        <button class="nav-btn right" onclick="saveApiConfig()">保存</button>
+      </div>
+      <div class="center-wrap">
+        <div class="config-switcher-wrapper" id="apiConfigList"></div>
+      </div>
+      <div class="api-form">
+        <label class="form-label">配置名称</label>
+        <input type="text" id="cfgName" class="capsule-input" placeholder="My Config" oninput="updateApiField()">
+        <label class="form-label">API 地址</label>
+        <input type="text" id="cfgUrl" class="capsule-input" placeholder="https://api.openai.com/v1" oninput="updateApiField()">
+        <label class="form-label">API Key</label>
+        <input type="password" id="cfgKey" class="capsule-input" placeholder="sk-..." oninput="updateApiField()">
+        <label class="form-label">模型</label>
+        <div class="input-row">
+          <input type="text" id="cfgModel" class="capsule-input" style="margin-bottom:0;" placeholder="gpt-4o" oninput="updateApiField()">
+          <button class="refresh-btn" onclick="fetchModels()" title="拉取模型列表">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:15px;height:15px;"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+        </div>
+        <button class="save-btn" onclick="saveApiConfig()">保存配置</button>
+      </div>
+      <div class="test-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="font-weight:600;font-size:13px;">连接测试</span>
+          <span id="test-badge" style="font-size:11px;color:var(--ios-text-sub);">待测试</span>
+        </div>
+        <div id="test-status">// 点击运行测试...</div>
+        <button class="run-test-btn" onclick="runApiTest()">运行测试</button>
+      </div>
+    </div>
+
+    <!-- 通知页 -->
+    <div class="page" id="notifyPage">
+      <div class="nav-header"><button class="nav-btn" onclick="showSetPage('mainPage')"><svg width="10" height="18" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="3"><path d="M10 18L2 10L10 2"/></svg></button><div class="nav-center">通知</div><button class="nav-btn right" onclick="showSetPage('mainPage')">完成</button></div>
+      <div class="list-group" style="margin-top:14px;">
+        <div class="list-item"><div class="item-content">允许通知</div><div class="toggle-switch active" onclick="this.classList.toggle('active')"></div></div>
+        <div class="list-item" onclick="alert('测试通知已发出')"><div class="item-content" style="color:var(--pill-active);">发送测试通知</div></div>
+      </div>
+    </div>
+
+    <!-- ID 页 -->
+    <div class="page" id="idPage">
+      <div class="nav-header"><button class="nav-btn" onclick="showSetPage('mainPage')"><svg width="10" height="18" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="3"><path d="M10 18L2 10L10 2"/></svg></button><div class="nav-center">ID</div><button class="nav-btn right" onclick="saveID()">完成</button></div>
+      <div class="avatar-hero">
+        <div class="avatar-circle" onclick="document.getElementById('fAvatar').click()">
+          <img id="idAvatarPre" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E">
+        </div>
+        <input type="file" id="fAvatar" hidden accept="image/*" onchange="preAvatar(event)">
+      </div>
+      <div class="list-group"><div class="list-item" style="padding-right:16px;"><div class="item-content">姓名</div><input type="text" id="idIn" value="用户" style="border:none;text-align:right;font-size:15px;color:var(--ios-text-sub);outline:none;background:transparent;width:100px;"></div></div>
+    </div>
+
+    <!-- 调试台 -->
+    <div class="page" id="debugPage">
+      <div class="nav-header"><button class="nav-btn" onclick="showSetPage('mainPage')"><svg width="10" height="18" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="3"><path d="M10 18L2 10L10 2"/></svg></button><div class="nav-center">调试台</div><button class="nav-btn right" onclick="showSetPage('mainPage')">完成</button></div>
+      <div class="debug-console" id="debugConsole">> Socket Connected.<br>> Waiting for payload...</div>
+      <div style="padding:0 16px;"><button class="run-test-btn" onclick="runApiTest(true)" style="margin-top:8px;">发送 API 测试包</button></div>
+    </div>
+
+    <!-- 界面美化 -->
+    <div class="page" id="uiPage">
+      <div class="nav-header"><button class="nav-btn" onclick="showSetPage('mainPage')"><svg width="10" height="18" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="3"><path d="M10 18L2 10L10 2"/></svg></button><div class="nav-center">界面美化</div><button class="nav-btn right" onclick="showSetPage('mainPage')">完成</button></div>
+      <div class="center-wrap"><div class="config-switcher-wrapper">
+        <button class="config-pill active" id="tabWall" onclick="switchUI('wall')">壁纸</button>
+        <button class="config-pill" id="tabIcon" onclick="switchUI('icon')">图标</button>
+        <button class="config-pill" id="tabHome" onclick="switchUI('home')">主界面</button>
+      </div></div>
+      <div id="viewWall" class="ui-view active">
+        <div style="padding:0 16px;">
+          <div onclick="document.getElementById('fWall').click()" style="width:100%;height:126px;border-radius:14px;overflow:hidden;position:relative;background:#f0f0f5;cursor:pointer;margin-bottom:10px;box-shadow:0 2px 10px rgba(0,0,0,0.05);">
+            <div id="wallPreviewBg" style="position:absolute;inset:0;background-size:cover;background-position:center;"></div>
+            <div id="wallPreviewOverlay" style="position:absolute;inset:0;background:rgba(0,0,0,0.02);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;">
+              <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.9);display:flex;align-items:center;justify-content:center;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+              </div>
+              <span id="wallTip" style="font-size:11.5px;color:#666;font-weight:500;">点击选择壁纸</span>
+            </div>
+          </div>
+          <input type="file" id="fWall" hidden accept="image/*" onchange="uploadWallpaper(event)">
+          <button class="save-btn" onclick="document.getElementById('fWall').click()">更换壁纸</button>
+          <button class="secondary-btn" onclick="clearWallpaper()">恢复默认壁纸</button>
+        </div>
+      </div>
+      <div id="viewIcon" class="ui-view">
+        <div class="list-group" style="margin-top:12px;">
+          <div class="list-item" onclick="triggerIconUpload('settings')"><div class="item-content">设置</div><div class="item-icon preview-icon" id="preview-settings">+</div></div>
+          <div class="list-item" onclick="triggerIconUpload('phone')"><div class="item-content">电话</div><div class="item-icon preview-icon" id="preview-phone">+</div></div>
+          <div class="list-item" onclick="triggerIconUpload('contacts')"><div class="item-content">通讯录</div><div class="item-icon preview-icon" id="preview-contacts">+</div></div>
+          <div class="list-item" onclick="triggerIconUpload('photos')"><div class="item-content">相册</div><div class="item-icon preview-icon" id="preview-photos">+</div></div>
+          <div class="list-item" onclick="triggerIconUpload('camera')"><div class="item-content">相机</div><div class="item-icon preview-icon" id="preview-camera">+</div></div>
+        </div>
+        <input type="file" id="fIcon" hidden accept="image/*" onchange="uploadIcon(event)">
+        <div style="padding:0 16px;"><button class="save-btn" onclick="clearAllIcons()">恢复所有默认图标</button></div>
+      </div>
+      <div id="viewHome" class="ui-view">
+        <div class="list-group" style="margin:12px 16px;">
+          <div class="list-item" style="padding-right:16px;"><div class="item-content">全屏显示 (沉浸式)</div><div class="toggle-switch" id="toggle-fullscreen"></div></div>
+          <div class="list-item" style="padding-right:16px;"><div class="item-content">隐藏状态栏</div><div class="toggle-switch" id="toggle-statusbar"></div></div>
+          <div class="list-item" style="padding-right:16px;"><div class="item-content">隐藏底部小横条</div><div class="toggle-switch" id="toggle-homebar"></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /settings-app -->
+
+  <!-- Home Bar -->
+  <div id="global-home-bar" onclick="returnToHome()"><div id="ghb-bar"></div></div>
+
+  <!-- 模型选择弹窗 -->
+  <div id="modal-overlay" onclick="closeModal()">
+    <div id="modal-sheet" onclick="event.stopPropagation()">
+      <div id="modal-handle"></div>
+      <div id="modal-title">选择模型</div>
+      <div id="modal-list"></div>
+      <button id="modal-cancel" onclick="closeModal()">取消</button>
+    </div>
+  </div>
+
+</div><!-- /screen -->
+</div><!-- /phone-frame -->
+
+<script>
+/* ============================================
+   时间
+============================================ */
+function updateTime() {
+  const n = new Date(), h = n.getHours(), m = n.getMinutes();
+  document.getElementById('mika-time').textContent = (h<10?'0'+h:h)+':'+(m<10?'0'+m:m);
+}
+updateTime(); setInterval(updateTime, 1000);
+
+/* ============================================
+   App 切换（壁纸固定不动）
+============================================ */
+const homeView = document.getElementById('home-view');
+
+function openApp(appId) {
+  homeView.style.transform = 'translateX(-100%)';
+  document.getElementById(appId).style.transform = 'translateX(0)';
+}
+
+function returnToHome() {
+  exitEditMode();
+  homeView.style.transform = 'translateX(0)';
+  document.querySelectorAll('.app-view:not(#home-view)').forEach(a => {
+    a.style.transform = 'translateX(100%)';
+  });
+  setTimeout(() => showSetPage('mainPage'), 300);
+}
+
+/* ============================================
+   设置页切换
+============================================ */
+function showSetPage(id) {
+  document.querySelectorAll('#settings-app .page').forEach(p => p.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.getElementById('settings-app').scrollTop = 0;
+}
+function switchUI(type) {
+  ['wall','icon','home'].forEach(t => {
+    document.getElementById('tab'+t[0].toUpperCase()+t.slice(1))?.classList.toggle('active', type===t);
+    document.getElementById('view'+t[0].toUpperCase()+t.slice(1))?.classList.toggle('active', type===t);
+  });
+}
+
+/* ============================================
+   桌面网格系统
+   网格参数（全局常量，修改这里即可调整布局）
+============================================ */
+const GRID = {
+  cols:    4,       // 列数
+  cell:    55,      // 单元格宽高(px)
+  gap:     10,      // 单元格间距(px)
+  top:     42,      // 顶部起始偏移(状态栏高度)
+  left:    14,      // 左侧边距
+  maxRows: 6        // 最大行数（超过 dock 区域前）
+};
+
+/* 初始图标配置（Config驱动布局，col/row 从 0 开始）*/
+const INITIAL_ICONS = [
+  {
+    id: 'settings', label: '设置', page: 0, col: 0, row: 0,
+    svg: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+    action: () => openApp('settings-app')
+  }
+];
+
+/* 布局状态（由 localforage 恢复或使用初始值）*/
+let layout = [];      // [{id, label, page, col, row, svg, action}]
+let totalPages = 1;
+let currentPage = 0;
+let isEditMode = false;
+let editTimer = null;
+
+const pagesContainer = document.getElementById('pages-container');
+
+/* 计算图标的像素位置 */
+function gridToPixel(col, row) {
+  return {
+    left: GRID.left + col * (GRID.cell + GRID.gap),
+    top:  GRID.top  + row * (GRID.cell + GRID.gap)
+  };
+}
+
+/* 计算最近的网格坐标（拖拽松手时吸附） */
+function pixelToGrid(px, py) {
+  const col = Math.round((px - GRID.left) / (GRID.cell + GRID.gap));
+  const row = Math.round((py - GRID.top)  / (GRID.cell + GRID.gap));
+  return {
+    col: Math.max(0, Math.min(GRID.cols - 1, col)),
+    row: Math.max(0, Math.min(GRID.maxRows - 1, row))
+  };
+}
+
+/* ============================================
+   渲染桌面
+============================================ */
+function renderDesktop() {
+  /* 清空并重建页面 */
+  pagesContainer.innerHTML = '';
+  for (let p = 0; p < totalPages; p++) {
+    const page = document.createElement('div');
+    page.className = 'home-page';
+    page.dataset.page = p;
+    pagesContainer.appendChild(page);
+  }
+
+  /* 渲染每个图标 */
+  layout.forEach(item => renderIcon(item));
+
+  /* 更新指示点 */
+  updateDots();
+  pagesContainer.style.transform = `translateX(-${currentPage * 100}%)`;
+}
+
+function renderIcon(item) {
+  const page = pagesContainer.querySelector(`.home-page[data-page="${item.page}"]`);
+  if (!page) return;
+
+  /* 移除旧元素（如有） */
+  const old = document.getElementById('icon-el-' + item.id);
+  if (old) old.remove();
+
+  const el = document.createElement('div');
+  el.className = 'app-icon';
+  el.id = 'icon-el-' + item.id;
+  el.dataset.id = item.id;
+
+  const pos = gridToPixel(item.col, item.row);
+  el.style.left = pos.left + 'px';
+  el.style.top  = pos.top  + 'px';
+
+  el.innerHTML = `
+    <div class="icon-box" id="icon-box-${item.id}">${item.svg}</div>
+    <span>${item.label}</span>`;
+
+  /* 恢复自定义图标 */
+  localforage.getItem('mika_icon_' + item.id).then(b64 => {
+    if (b64) applyIconB64(item.id, b64, false);
+  });
+
+  /* 点击（非编辑模式执行动作） */
+  el.addEventListener('click', () => {
+    if (isEditMode) return;
+    item.action && item.action();
+  });
+
+  /* 长按触发编辑模式 */
+  attachLongPress(el, item);
+
+  page.appendChild(el);
+}
+
+/* ============================================
+   长按 & 拖拽系统
+============================================ */
+function attachLongPress(el, item) {
+  let longTimer = null;
+  let isDragging = false;
+  let startX, startY;
+
+  /* 长按检测（touch + mouse 双兼容）*/
+  function onStart(clientX, clientY) {
+    startX = clientX; startY = clientY;
+    longTimer = setTimeout(() => {
+      enterEditMode();
+      startDrag(el, item, clientX, clientY);
+    }, 500);
+  }
+  function onMove(clientX, clientY) {
+    const dx = Math.abs(clientX - startX), dy = Math.abs(clientY - startY);
+    if (dx > 6 || dy > 6) { clearTimeout(longTimer); longTimer = null; }
+  }
+  function onEnd() { clearTimeout(longTimer); longTimer = null; }
+
+  el.addEventListener('touchstart', e => { onStart(e.touches[0].clientX, e.touches[0].clientY); }, { passive: true });
+  el.addEventListener('touchmove',  e => { onMove(e.touches[0].clientX, e.touches[0].clientY); }, { passive: true });
+  el.addEventListener('touchend',   onEnd);
+  el.addEventListener('mousedown',  e => onStart(e.clientX, e.clientY));
+  el.addEventListener('mousemove',  e => onMove(e.clientX, e.clientY));
+  el.addEventListener('mouseup',    onEnd);
+}
+
+/* 进入编辑模式 */
+function enterEditMode() {
+  if (isEditMode) return;
+  isEditMode = true;
+  homeView.classList.add('edit-mode');
+  pagesContainer.querySelectorAll('.home-page').forEach(p => p.classList.add('edit-mode'));
+  /* 震动（移动端） */
+  if (navigator.vibrate) navigator.vibrate(40);
+  /* 点击桌面空白区退出编辑 */
+  pagesContainer.querySelectorAll('.home-page').forEach(p => {
+    p.addEventListener('click', onBlankClick, { once: false });
+  });
+}
+
+function onBlankClick(e) {
+  if (e.target === e.currentTarget) exitEditMode();
+}
+
+function exitEditMode() {
+  if (!isEditMode) return;
+  isEditMode = false;
+  homeView.classList.remove('edit-mode');
+  pagesContainer.querySelectorAll('.home-page').forEach(p => {
+    p.classList.remove('edit-mode');
+    p.removeEventListener('click', onBlankClick);
+  });
+}
+
+/* 开始拖拽 */
+function startDrag(el, item, startClientX, startClientY) {
+  const screen = document.querySelector('.screen');
+  const screenRect = screen.getBoundingClientRect();
+
+  /* 克隆拖拽浮层 */
+  const ghost = el.cloneNode(true);
+  ghost.style.position = 'fixed';
+  ghost.style.width = GRID.cell + 'px';
+  ghost.style.zIndex = 99999;
+  ghost.style.pointerEvents = 'none';
+  ghost.style.transition = 'none';
+  ghost.style.transform = 'scale(1.12)';
+  ghost.style.filter = 'drop-shadow(0 8px 22px rgba(0,0,0,0.2))';
+  ghost.style.transformOrigin = 'center center';
+  document.body.appendChild(ghost);
+
+  /* 原图标半透明 */
+  el.style.opacity = '0.35';
+  el.style.transition = 'none';
+
+  /* 初始位置：以手指为中心 */
+  function setGhostPos(cx, cy) {
+    ghost.style.left = (cx - GRID.cell/2) + 'px';
+    ghost.style.top  = (cy - GRID.cell/2 - 10) + 'px';
+  }
+  setGhostPos(startClientX, startClientY);
+
+  /* 高亮指示的目标格（可选视觉反馈，此处用 placeholder 实现） */
+  let placeholder = null;
+
+  function moveDrag(cx, cy) {
+    setGhostPos(cx, cy);
+    /* 将客户端坐标转换为 screen 内坐标 */
+    const relX = cx - screenRect.left - currentPage * screenRect.width;
+    const relY = cy - screenRect.top;
+    const { col, row } = pixelToGrid(relX, relY);
+
+    /* 移动占位格 */
+    if (placeholder) placeholder.remove();
+    placeholder = document.createElement('div');
+    placeholder.style.cssText = `
+      position:absolute;
+      width:${GRID.cell}px; height:${GRID.cell}px;
+      border-radius:14px; background:rgba(0,0,0,0.06);
+      transition: left 0.18s ease, top 0.18s ease;
+      pointer-events:none; z-index:1;
+    `;
+    const pp = gridToPixel(col, row);
+    placeholder.style.left = pp.left + 'px';
+    placeholder.style.top  = pp.top  + 'px';
+
+    const curPage = pagesContainer.querySelector(`.home-page[data-page="${currentPage}"]`);
+    if (curPage) curPage.appendChild(placeholder);
+
+    /* 其他图标让位（仅同页）*/
+    layout.filter(i => i.page === currentPage && i.id !== item.id).forEach(other => {
+      const othEl = document.getElementById('icon-el-' + other.id);
+      if (!othEl) return;
+      if (other.col === col && other.row === row) {
+        /* 目标格有图标：向右平移一格（简单挤开）*/
+        const shifted = pixelToGrid(
+          gridToPixel(other.col, other.row).left + GRID.cell + GRID.gap,
+          gridToPixel(other.col, other.row).top
+        );
+        const sp = gridToPixel(shifted.col, shifted.row);
+        othEl.style.transition = 'left 0.22s ease, top 0.22s ease';
+        othEl.style.left = sp.left + 'px';
+        othEl.style.top  = sp.top  + 'px';
+      } else {
+        /* 恢复原位 */
+        const op = gridToPixel(other.col, other.row);
+        othEl.style.transition = 'left 0.22s ease, top 0.22s ease';
+        othEl.style.left = op.left + 'px';
+        othEl.style.top  = op.top  + 'px';
+      }
+    });
+  }
+
+  function endDrag(cx, cy) {
+    /* 清理浮层和占位 */
+    ghost.remove();
+    if (placeholder) placeholder.remove();
+
+    /* 计算落点 */
+    const relX = cx - screenRect.left - currentPage * screenRect.width;
+    const relY = cy - screenRect.top;
+    const { col, row } = pixelToGrid(relX, relY);
+
+    /* 更新 layout */
+    const conflict = layout.find(i => i.page === currentPage && i.col === col && i.row === row && i.id !== item.id);
+    if (conflict) {
+      /* 被挤的图标换到当前图标的旧位置 */
+      const oldCol = item.col, oldRow = item.row;
+      conflict.col = oldCol; conflict.row = oldRow;
+      const cp = gridToPixel(oldCol, oldRow);
+      const confEl = document.getElementById('icon-el-' + conflict.id);
+      if (confEl) {
+        confEl.style.transition = 'left 0.28s cubic-bezier(0.34,1.56,0.64,1), top 0.28s cubic-bezier(0.34,1.56,0.64,1)';
+        confEl.style.left = cp.left + 'px'; confEl.style.top = cp.top + 'px';
+      }
+    }
+
+    item.col = col; item.row = row; item.page = currentPage;
+    const np = gridToPixel(col, row);
+
+    el.style.opacity = '1';
+    el.style.transition = 'left 0.28s cubic-bezier(0.34,1.56,0.64,1), top 0.28s cubic-bezier(0.34,1.56,0.64,1)';
+    el.style.left = np.left + 'px';
+    el.style.top  = np.top  + 'px';
+
+    saveLayout();
+  }
+
+  /* 事件监听 */
+  function onTouchMove(e) { moveDrag(e.touches[0].clientX, e.touches[0].clientY); }
+  function onTouchEnd(e)  { document.removeEventListener('touchmove', onTouchMove); document.removeEventListener('touchend', onTouchEnd); endDrag(e.changedTouches[0].clientX, e.changedTouches[0].clientY); }
+  function onMouseMove(e) { moveDrag(e.clientX, e.clientY); }
+  function onMouseUp(e)   { document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); endDrag(e.clientX, e.clientY); }
+
+  document.addEventListener('touchmove', onTouchMove, { passive: true });
+  document.addEventListener('touchend', onTouchEnd);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+}
+
+/* 长按桌面空白区进入编辑模式 */
+(function setupDesktopLongPress() {
+  let blankTimer = null;
+  homeView.addEventListener('touchstart', e => {
+    if (e.target !== homeView && !e.target.closest('.home-page')) return;
+    if (e.target.closest('.app-icon')) return;
+    blankTimer = setTimeout(() => enterEditMode(), 500);
+  }, { passive: true });
+  homeView.addEventListener('touchend', () => clearTimeout(blankTimer));
+  homeView.addEventListener('touchmove', () => clearTimeout(blankTimer));
+  homeView.addEventListener('mousedown', e => {
+    if (e.target.closest('.app-icon')) return;
+    blankTimer = setTimeout(() => enterEditMode(), 500);
+  });
+  homeView.addEventListener('mouseup', () => clearTimeout(blankTimer));
+})();
+
+/* ============================================
+   多页管理
+============================================ */
+function goToPage(idx) {
+  if (idx < 0 || idx >= totalPages) return;
+  currentPage = idx;
+  pagesContainer.style.transform = `translateX(-${idx * 100}%)`;
+  updateDots();
+}
+
+function updateDots() {
+  const el = document.getElementById('page-dots');
+  el.innerHTML = '';
+  for (let i = 0; i < totalPages; i++) {
+    const d = document.createElement('div');
+    d.className = 'page-dot' + (i === currentPage ? ' active' : '');
+    el.appendChild(d);
+  }
+}
+
+function addPage() {
+  totalPages++;
+  const page = document.createElement('div');
+  page.className = 'home-page';
+  page.dataset.page = totalPages - 1;
+  if (isEditMode) page.classList.add('edit-mode');
+  pagesContainer.appendChild(page);
+  page.addEventListener('click', onBlankClick);
+  saveLayout();
+  goToPage(totalPages - 1);
+}
+
+/* 滑动翻页 */
+let swipeStartX = 0, swipeStartY = 0, isSwiping = false;
+homeView.addEventListener('touchstart', e => {
+  if (e.target.closest('.app-icon')) return;
+  swipeStartX = e.touches[0].clientX;
+  swipeStartY = e.touches[0].clientY;
+  isSwiping = true;
+}, { passive: true });
+homeView.addEventListener('touchend', e => {
+  if (!isSwiping) return;
+  isSwiping = false;
+  const dx = e.changedTouches[0].clientX - swipeStartX;
+  const dy = Math.abs(e.changedTouches[0].clientY - swipeStartY);
+  if (Math.abs(dx) > 44 && dy < 40) {
+    dx < 0 ? goToPage(currentPage + 1) : goToPage(currentPage - 1);
+  }
+});
+
+/* ============================================
+   布局持久化
+============================================ */
+function saveLayout() {
+  const toSave = layout.map(({ id, label, page, col, row }) => ({ id, label, page, col, row }));
+  localforage.setItem('mika_layout', toSave);
+  localforage.setItem('mika_total_pages', totalPages);
+}
+
+function initLayout() {
+  localforage.getItem('mika_layout').then(saved => {
+    localforage.getItem('mika_total_pages').then(savedPages => {
+      totalPages = (savedPages && savedPages >= 1) ? savedPages : 1;
+      if (saved && saved.length > 0) {
+        /* 将保存的位置数据合并回初始图标（保留 svg/action） */
+        layout = INITIAL_ICONS.map(icon => {
+          const s = saved.find(x => x.id === icon.id);
+          return s ? { ...icon, page: s.page, col: s.col, row: s.row } : { ...icon };
+        });
+      } else {
+        layout = [...INITIAL_ICONS];
+      }
+      renderDesktop();
+    });
+  });
+}
+initLayout();
+
+/* ============================================
+   API 配置系统
+============================================ */
+const API_PRESETS = [
+  { name: 'OpenAI',      url: 'https://api.openai.com/v1',                              model: 'gpt-4o' },
+  { name: 'Anthropic',   url: 'https://api.anthropic.com/v1',                           model: 'claude-3-5-sonnet-20241022' },
+  { name: 'Deepseek',    url: 'https://api.deepseek.com/v1',                            model: 'deepseek-chat' },
+  { name: 'Moonshot',    url: 'https://api.moonshot.cn/v1',                             model: 'moonshot-v1-8k' },
+  { name: 'Groq',        url: 'https://api.groq.com/openai/v1',                         model: 'llama-3.3-70b-versatile' },
+  { name: 'Gemini',      url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.0-flash' },
+  { name: 'Ollama',      url: 'http://localhost:11434/v1',                               model: 'llama3' },
+];
+
+let apiData = [];
+let apiActive = null;
+
+localforage.getItem('mika_api_configs').then(saved => {
+  apiData = (saved && saved.length) ? saved : [{ id: 1, name: 'Production', url: 'https://api.openai.com/v1', key: '', model: 'gpt-4o' }];
+  return localforage.getItem('mika_api_active');
+}).then(activeId => {
+  apiActive = activeId || apiData[0].id;
+  renderApiTabs(); setApiActive(apiActive);
+});
+
+function renderApiTabs() {
+  document.getElementById('apiConfigList').innerHTML =
+    apiData.map(c => {
+      const del = (apiData.length > 1 && c.id === apiActive)
+        ? `<span class="mini-del" onclick="delApiConfig(${c.id},event)">×</span>` : '';
+      return `<button class="config-pill ${c.id===apiActive?'active':''}" onclick="setApiActive(${c.id})">${c.name}${del}</button>`;
+    }).join('') + `<button class="config-pill" onclick="addApiConfig()">＋</button>`;
+}
+
+function setApiActive(id) {
+  apiActive = id;
+  const cfg = apiData.find(c => c.id === id);
+  if (cfg) {
+    document.getElementById('cfgName').value  = cfg.name  || '';
+    document.getElementById('cfgUrl').value   = cfg.url   || '';
+    document.getElementById('cfgKey').value   = cfg.key   || '';
+    document.getElementById('cfgModel').value = cfg.model || '';
+  }
+  renderApiTabs();
+}
+
+function updateApiField() {
+  const cfg = apiData.find(c => c.id === apiActive);
+  if (cfg) {
+    cfg.name  = document.getElementById('cfgName').value;
+    cfg.url   = document.getElementById('cfgUrl').value;
+    cfg.key   = document.getElementById('cfgKey').value;
+    cfg.model = document.getElementById('cfgModel').value;
+    renderApiTabs();
+  }
+}
+
+function saveApiConfig() {
+  updateApiField();
+  localforage.setItem('mika_api_configs', apiData);
+  localforage.setItem('mika_api_active', apiActive);
+  const btn = document.querySelector('#apiPage .save-btn');
+  const orig = btn.textContent;
+  btn.textContent = '已保存';
+  setTimeout(() => btn.textContent = orig, 1200);
+}
+
+function addApiConfig() {
+  const nid = Date.now();
+  apiData.push({ id: nid, name: '新配置', url: '', key: '', model: '' });
+  setApiActive(nid);
+}
+
+function delApiConfig(id, e) {
+  e.stopPropagation();
+  if (apiData.length <= 1) return;
+  apiData = apiData.filter(c => c.id !== id);
+  apiActive = apiData[0].id;
+  setApiActive(apiActive);
+}
+
+/* 拉取模型 → 弹窗选择 */
+async function fetchModels() {
+  const url = document.getElementById('cfgUrl').value.trim();
+  const key = document.getElementById('cfgKey').value.trim();
+  if (!url || !key) { alert('请先填写 API 地址和 Key'); return; }
+
+  const refreshBtn = document.querySelector('.refresh-btn');
+  refreshBtn.style.opacity = '0.4';
+  try {
+    const res = await fetch(url.replace(/\/$/, '') + '/models', {
+      headers: { 'Authorization': 'Bearer ' + key }
+    });
+    const data = await res.json();
+    const models = (data.data || []).map(m => m.id).sort();
+    if (!models.length) { alert('未获取到模型列表'); return; }
+    showModelModal(models);
+  } catch(e) {
+    alert('获取失败：' + e.message);
+  } finally {
+    refreshBtn.style.opacity = '1';
+  }
+}
+
+/* 模型选择弹窗 */
+function showModelModal(models) {
+  const overlay = document.getElementById('modal-overlay');
+  const list    = document.getElementById('modal-list');
+  const current = document.getElementById('cfgModel').value;
+
+  list.innerHTML = models.map(m => `
+    <div class="modal-item ${m===current?'selected':''}" onclick="pickModel('${m}')">
+      <span>${m}</span>
+      <svg class="check-mark" viewBox="0 0 24 24" fill="none" stroke="#4a4a4a" stroke-width="2.5" stroke-linecap="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>`).join('');
+
+  overlay.classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('show');
+}
+
+function pickModel(m) {
+  document.getElementById('cfgModel').value = m;
+  updateApiField();
+  closeModal();
+}
+
+/* API 连接测试 */
+async function runApiTest(isDebug = false) {
+  const cfg = apiData.find(c => c.id === apiActive);
+  if (!cfg || !cfg.url || !cfg.key) { setTestStatus('err', 'ERR: 请填写 API 地址和 Key'); return; }
+
+  setTestStatus('', '正在测试...');
+  const endpoint = cfg.url.replace(/\/$/, '') + '/chat/completions';
+  const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key };
+  if (cfg.url.includes('anthropic.com')) {
+    headers['x-api-key'] = cfg.key;
+    headers['anthropic-version'] = '2023-06-01';
+    delete headers['Authorization'];
+  }
+  try {
+    const t0 = Date.now();
+    const res = await fetch(endpoint, {
+      method: 'POST', headers,
+      body: JSON.stringify({ model: cfg.model || 'gpt-4o', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] })
+    });
+    const ms = Date.now() - t0;
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    const msg = `${res.status} OK  ${ms}ms  ${cfg.model}`;
+    setTestStatus('ok', msg);
+    if (isDebug) appendDebug('> ' + msg);
+  } catch(e) {
+    setTestStatus('err', 'ERR: ' + e.message);
+    if (isDebug) appendDebug('> ERR: ' + e.message);
+  }
+}
+
+function setTestStatus(cls, msg) {
+  const el = document.getElementById('test-status'); el.className = cls; el.textContent = msg;
+  const b = document.getElementById('test-badge');
+  if (b) b.textContent = cls==='ok' ? '正常' : cls==='err' ? '错误' : '待测试';
+}
+function appendDebug(line) {
+  const c = document.getElementById('debugConsole'); c.innerHTML += '<br>'+line; c.scrollTop = c.scrollHeight;
+}
+
+/* ============================================
+   ID & 头像
+============================================ */
+localforage.getItem('mika_user_name').then(v=>{if(v){document.getElementById('mainName').innerText=v;document.getElementById('idIn').value=v;}});
+localforage.getItem('mika_user_avatar').then(v=>{if(v){document.getElementById('mainAvatar').src=v;document.getElementById('idAvatarPre').src=v;}});
+function preAvatar(e){const r=new FileReader();r.onload=()=>document.getElementById('idAvatarPre').src=r.result;r.readAsDataURL(e.target.files[0]);}
+function saveID(){
+  const name=document.getElementById('idIn').value, av=document.getElementById('idAvatarPre').src;
+  document.getElementById('mainName').innerText=name; document.getElementById('mainAvatar').src=av;
+  localforage.setItem('mika_user_name',name); localforage.setItem('mika_user_avatar',av);
+  showSetPage('mainPage');
+}
+
+/* ============================================
+   系统开关
+============================================ */
+const btnFull = document.getElementById('toggle-fullscreen');
+btnFull.addEventListener('click', function(){
+  this.classList.toggle('active');
+  if(this.classList.contains('active')){document.body.classList.add('fullscreen-mode');if(document.documentElement.requestFullscreen)document.documentElement.requestFullscreen();}
+  else{document.body.classList.remove('fullscreen-mode');if(document.exitFullscreen&&document.fullscreenElement)document.exitFullscreen();}
+});
+document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement){btnFull.classList.remove('active');document.body.classList.remove('fullscreen-mode');}});
+
+document.getElementById('toggle-statusbar').addEventListener('click',function(){
+  this.classList.toggle('active');
+  document.getElementById('status-bar').classList.toggle('hide',this.classList.contains('active'));
+});
+document.getElementById('toggle-homebar').addEventListener('click',function(){
+  this.classList.toggle('active');
+  document.getElementById('global-home-bar').classList.toggle('hide',this.classList.contains('active'));
+});
+
+/* ============================================
+   壁纸
+============================================ */
+const wallpaperLayer = document.getElementById('wallpaper-layer');
+function applyWallpaperPreview(b64){
+  wallpaperLayer.style.backgroundImage=`url(${b64})`;
+  document.getElementById('wallPreviewBg').style.backgroundImage=`url(${b64})`;
+  document.getElementById('wallPreviewOverlay').style.background='rgba(0,0,0,0.1)';
+  document.getElementById('wallTip').innerText='已应用 · 点击更换';
+}
+localforage.getItem('mika_wallpaper').then(v=>{if(v)applyWallpaperPreview(v);});
+function uploadWallpaper(e){
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader(); r.onload=ev=>{applyWallpaperPreview(ev.target.result);localforage.setItem('mika_wallpaper',ev.target.result);}; r.readAsDataURL(f);
+}
+function clearWallpaper(){
+  wallpaperLayer.style.backgroundImage='none';
+  document.getElementById('wallPreviewBg').style.backgroundImage='none';
+  document.getElementById('wallPreviewOverlay').style.background='rgba(0,0,0,0.02)';
+  document.getElementById('wallTip').innerText='点击选择壁纸';
+  localforage.removeItem('mika_wallpaper');
+}
+
+/* ============================================
+   图标替换（Dock + 桌面）
+============================================ */
+const iconAppList = ['settings','phone','contacts','photos','camera'];
+let currentIconEditApp = '';
+
+iconAppList.forEach(app => {
+  localforage.getItem('mika_icon_' + app).then(val => { if(val) applyIconB64(app, val, true); });
+});
+
+function applyIconB64(app, b64, updatePreview = true) {
+  /* 更新桌面图标 */
+  const box = document.getElementById('icon-box-' + app);
+  if (box) {
+    box.style.backgroundImage = `url(${b64})`;
+    box.style.backgroundSize = 'cover'; box.style.backgroundPosition = 'center';
+    const svg = box.querySelector('svg'); if(svg) svg.style.display='none';
+  }
+  /* 更新设置预览 */
+  if (updatePreview) {
+    const preview = document.getElementById('preview-' + app);
+    if (preview) {
+      preview.style.backgroundImage = `url(${b64})`;
+      preview.style.backgroundSize = 'cover'; preview.style.backgroundPosition = 'center';
+      preview.style.border = 'none'; preview.innerHTML = '';
+    }
+  }
+}
+
+function triggerIconUpload(app){ currentIconEditApp=app; document.getElementById('fIcon').click(); }
+function uploadIcon(e){
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader(); r.onload=ev=>{applyIconB64(currentIconEditApp,ev.target.result,true);localforage.setItem('mika_icon_'+currentIconEditApp,ev.target.result);e.target.value='';}; r.readAsDataURL(f);
+}
+function clearAllIcons(){
+  iconAppList.forEach(app=>{
+    localforage.removeItem('mika_icon_'+app);
+    const box=document.getElementById('icon-box-'+app);
+    if(box){box.style.backgroundImage='none';const svg=box.querySelector('svg');if(svg)svg.style.display='block';}
+    const preview=document.getElementById('preview-'+app);
+    if(preview){preview.style.backgroundImage='none';preview.style.border='1px dashed #ccc';preview.innerHTML='+';}
+  });
+}
+</script>
+</body>
+</html>
